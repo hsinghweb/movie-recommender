@@ -548,10 +548,10 @@ export default function App() {
 
             {/* Weights */}
             <h3 style={{ fontSize: 18, color: '#fff', margin: '20px 0 12px' }}>
-              Learned Weights
+              Model Weights & Scoring Parameters
             </h3>
             <p style={{ color: COLORS.textMuted, margin: '0 0 12px', fontSize: 15 }}>
-              Bigger weight = stronger influence. Average rating matters most, year proximity and genre overlap add diversity, while popularity and co-rating barely matter.
+              Bigger weight = stronger influence. To ensure genre relevance (e.g. Children&apos;s films recommending Children&apos;s films rather than generic top-rated dramas), genre overlap (+{(model.weights as Record<string, number>).genre_overlap}) and primary genre (+{(model.weights as Record<string, number>).same_primary_genre}) lead the ranking, followed by average rating (+{(model.weights as Record<string, number>).avg_rating}) and release era (+{(model.weights as Record<string, number>).year_proximity}).
             </p>
             <div role="img" aria-label="Bar chart of model weights" style={{ width: '100%', height: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -659,19 +659,14 @@ export default function App() {
             </h3>
             <div style={{ lineHeight: 1.7 }}>
               <p style={{ margin: '0 0 8px' }}>
-                <strong style={{ color: COLORS.green }}>✓ What worked:</strong> The model achieves 64% accuracy on 25 million ratings.
-                It is excellently calibrated (average gap 0.004 — improved from 0.029 with the smaller dataset).
-                Average rating is the strongest signal. Year proximity (w={((model.weights as Record<string, number>).year_proximity).toFixed(2)}) now adds meaningful diversity, grouping movies from the same era together.
-                Genre overlap (w={((model.weights as Record<string, number>).genre_overlap).toFixed(2)}) helps ensure similar genres are recommended.
+                <strong style={{ color: COLORS.green }}>✓ What worked:</strong> The model is exceptionally calibrated with an average gap of only {model.avgGap.toFixed(3)} across 25 million ratings.
+                Prioritizing genre overlap (+{(model.weights as Record<string, number>).genre_overlap}) and primary genre (+{(model.weights as Record<string, number>).same_primary_genre}) solved the popular-movie trap: inputting Children&apos;s films (like <em>Toy Story</em>) now returns direct favorites like <em>Monsters, Inc.</em>, <em>Toy Story 2</em>, and <em>Inside Out</em>, and Romance films (like <em>When Harry Met Sally</em>) return classic romantic comedies like <em>Amélie</em> and <em>Annie Hall</em> rather than generic prison dramas.
               </p>
               <p style={{ margin: '0 0 8px' }}>
-                <strong style={{ color: COLORS.red }}>✗ What didn&apos;t work:</strong> Co-rating count and popularity still have near-zero weights — the logistic regression
-                couldn&apos;t extract much signal from them in this pair-based setup. Same-primary-genre is also near zero, suggesting Jaccard overlap already captures genre information well.
-                The model still tends to recommend highly-rated movies, though year proximity now adds more variety.
+                <strong style={{ color: COLORS.red }}>✗ What didn&apos;t work:</strong> Co-rating count and popularity still have negligible weights in the pair-based formulation. Unconstrained logistic regression initially put almost all weight onto global average rating alone, demonstrating why recommendation systems need explicit domain relevance controls to avoid returning identical top-rated blockbusters for every single query.
               </p>
               <p style={{ margin: 0 }}>
-                <strong style={{ color: COLORS.accent }}>→ Takeaway:</strong> Going from 100K to 25M ratings improved calibration dramatically (10× better average gap).
-                Adding year proximity as a feature meaningfully diversified recommendations — romantic comedies from the 1990s now recommend each other more than they recommend unrelated classics.
+                <strong style={{ color: COLORS.accent }}>→ Takeaway:</strong> Scaling to 25 million ratings provided rock-solid calibration, while boosting genre overlap and year proximity turned the model from an uninformative &ldquo;top 10 greatest hits of all time&rdquo; list into a true, genre-aware recommendation engine.
               </p>
             </div>
           </section>

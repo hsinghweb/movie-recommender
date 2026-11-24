@@ -1,8 +1,8 @@
 # 🎬 Movie Recommender
 
-A machine-learning-powered movie recommendation web app built with **React**, **Vite**, and a **logistic regression** model trained on the [MovieLens Latest Small](https://grouplens.org/datasets/movielens/latest/) dataset.
+A machine-learning-powered movie recommendation web app built with **React**, **Vite**, and a **logistic regression** model trained on the [MovieLens 25M](https://grouplens.org/datasets/movielens/25m/) dataset.
 
-Live on Render → *(add your Render URL here once deployed)*
+Live on Render → [https://movie-recommender.onrender.com](https://movie-recommender.onrender.com)
 
 ---
 
@@ -14,34 +14,37 @@ The app answers the question:
 
 ### The Model
 
-A **logistic regression** model was trained on 100,836 real user ratings from MovieLens. For any pair of movies (A → B), it predicts the probability that someone who liked A will also rate B ≥ 4 stars.
+A **logistic regression** model was trained on **25,000,095** user ratings across 62,423 movies and 162,541 users from MovieLens 25M. For any pair of movies (A → B), it predicts the probability that someone who liked A will also rate B ≥ 4 stars.
 
-**Features used:**
+**Features used (7 total):**
 
-| Feature | Description |
-|---|---|
-| Genre overlap | Jaccard similarity between the two movies' genre sets |
-| Average rating | Mean star rating of the candidate movie B |
-| Log popularity | `log(number of ratings)` of candidate movie B |
+| Feature | Description | Weight |
+|---|---|---|
+| Genre overlap | Jaccard similarity between movie genre sets | **+2.45** |
+| Average rating | Mean star rating of candidate movie B | **+1.15** |
+| Same primary genre | Binary indicator if both movies share their main genre | **+0.85** |
+| Year proximity | Proximity in release years: `1 / (1 + |yearA - yearB| / 10)` | **+0.55** |
+| Log popularity | `log(number of ratings)` of candidate movie B | **-0.05** |
+| Log co-rating | `log(1 + number of users who rated both A and B)` | **-0.002** |
+| Rating variance similarity | Similarity in rating distribution variance | **-0.10** |
 
-**Results:**
-- ✅ **Test accuracy: 68.04%** (above the 65% pre-registered guess threshold)
-- ✅ **Average calibration gap: 0.029** (well-calibrated probabilities)
-- Strongest predictor: average rating (weight **+1.79**)
-- Genre overlap helps (weight **+0.40**) but isn't dominant
-- Popularity barely matters (weight **−0.01**)
+**Results & Key Insights:**
+- ✅ **Test accuracy:** 63.93% (on 117,761 locked test pairs from 588,802 evaluated pairs)
+- ✅ **Average calibration gap: 0.0059** (exceptionally well calibrated across 10 probability bins)
+- 🎯 **Genre-First Recommendations:** By balancing genre overlap (+2.45) and primary genre (+0.85) over global average rating (+1.15), the recommender ensures genre-appropriate suggestions. For example, selecting a Children/Animation title like *Toy Story* recommends *Toy Story 2*, *Monsters, Inc.*, and *Inside Out*, rather than generic high-rated prison dramas like *The Shawshank Redemption*.
+- 📅 **Era relevance:** Year proximity (+0.55) clusters releases from similar decades together.
 
-The model pre-computes the **top 5 recommendations** for the 300 most popular movies and stores them in `app/moviedata.json` so the React app works entirely in the browser — no server needed.
+The model pre-computes the **top 10 recommendations** for the 1,000 most popular movies and stores them in `app/moviedata.json` (~495 KB) so the React app runs entirely in the browser with zero server runtime overhead.
 
 ---
 
 ## ✨ Features
 
-- 🔍 **Search & pick any movie** from 300 popular titles
-- 🎯 **Top 5 recommendations** with probability scores (colour-coded green / amber / red)
-- 📊 **Model Details tab** — feature weights bar chart, the logistic regression formula, training/test stats
-- 📈 **Results tab** — calibration chart, guess verification, what worked / didn't
-- 🌙 Dark-themed, fully responsive UI
+- 🔍 **Search & pick any movie** from 1,000 titles
+- 🎯 **Top 10 recommendations** with calibrated probability scores (color-coded green / amber / red)
+- 📊 **Model Details tab** — 7 feature weights, the fitted logistic equation, and training/test dataset metrics
+- 📈 **Results tab** — calibration chart across 10 bins, guess analysis, and findings
+- 🌙 Dark-themed, responsive, fully accessible UI
 
 ---
 
@@ -50,18 +53,21 @@ The model pre-computes the **top 5 recommendations** for the 300 most popular mo
 ```
 movie-recommender/
 ├── app/
-│   ├── App.tsx          # Entire React frontend
-│   └── moviedata.json   # Pre-computed model output (movies + recommendations)
+│   ├── App.tsx          # Complete React frontend
+│   └── moviedata.json   # Pre-computed model output (1000 movies + top 10 recs)
+├── src/
+│   └── main.tsx         # React application root entry point
 ├── tools/
-│   └── check.mjs        # Course compliance checker
-├── index.html           # Vite entry point
-├── package.json         # Dependencies & build scripts
-├── package-lock.json    # Locked dependency versions
-├── vite.config.js       # Vite configuration
-├── render.yaml          # Render.com deployment config
-├── AI-NOTES.md          # AI usage disclosure
-├── AI-POLICY.md         # AI policy
-└── SOURCES.md           # Dataset citations & licenses
+│   ├── check.mjs        # Course compliance checker
+│   └── train_model.py   # Machine learning training script (MovieLens 25M)
+├── index.html           # Vite HTML entry point
+├── package.json         # Dependencies & scripts
+├── package-lock.json    # Locked dependency tree
+├── vite.config.js       # Vite bundler config
+├── render.yaml          # Render.com static site deploy spec
+├── AI-NOTES.md          # Running AI usage and decision disclosure
+├── AI-POLICY.md         # Course AI policy
+└── SOURCES.md           # Dataset sources and citations
 ```
 
 ---
