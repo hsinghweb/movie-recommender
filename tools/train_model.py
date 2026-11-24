@@ -31,6 +31,8 @@ from scipy import sparse
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, log_loss
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'ml-25m')
 APP_DIR = os.path.join(os.path.dirname(__file__), '..', 'app')
@@ -177,58 +179,80 @@ def compute_features(ma, mb, mid_a, mid_b):
     ]
 
 # ── 7. Build training data (pairs of movies) ─────────────────────────────
-print("Building training pairs (sampling from users)...")
+print("Building training pairs (vectorized from user ratings)...")
 
 movie_lookup = popular.set_index('movieId')
+# Pre-cache feature lookup for all popular movies to avoid repeated computation
+print("  Pre-caching movie metadata lookup...")
+movie_meta = {}
+for mid, row in popular.iterrows():
+    m_id = row['movieId']
+    y = row['year']
+    if y is not None and (isinstance(y, (int, float)) and not math.isnan(float(y))):
+        y_val = int(y)
+    else:
+        y_val = None
+    movie_meta[m_id] = {
+        'genre_set': row['genre_set'],
+        'primary_genre': row.get('primary_genre', ''),
+        'year': y_val,
+        'avg_rating': safe_float(row['avg_rating']),
+        'log_pop': math.log(max(1, safe_float(row['num_ratings'], 1))),
+        'std': safe_float(row['rating_std'])
+    }
+
+def fast_compute_features(ma, mb, mid_a, mid_b):
+    return [
+        genre_jaccard(ma['genre_set'], mb['genre_set']),
+        mb['avg_rating'],
+        mb['log_pop'],
+        year_proximity(ma['year'], mb['year']),
+        same_primary(ma['primary_genre'], mb['primary_genre']),
+        math.log(1 + get_co_rating(mid_a, mid_b)),
+        rating_var_sim(ma['std'], mb['std']),
+    ]
+
+# Use 50,000 active users (gives over 500,000 highly informative pairs in seconds)
+np.random.seed(42)
+users_with_ratings = ratings[ratings['movieId'].isin(popular_ids)]
+grouped_likes = users_with_ratings[users_with_ratings['rating'] >= 4].groupby('userId')['movieId'].apply(list)
+grouped_dislikes = users_with_ratings[users_with_ratings['rating'] < 4].groupby('userId')['movieId'].apply(list)
+
+# Common users who have rated multiple movies
+eligible_users = grouped_likes[grouped_likes.apply(len) >= 2].index
+if len(eligible_users) > 50000:
+    selected_uids = np.random.choice(eligible_users, 50000, replace=False)
+else:
+    selected_uids = eligible_users
+
+print(f"  Sampling pairs from {len(selected_uids):,} qualified users...")
+
 all_pairs = []
 positive_count = 0
 pair_count = 0
 
-# Sample users for training (use a subset for efficiency with 162K users)
-rated_by_user = ratings[ratings['movieId'].isin(popular_ids)].groupby('userId')
-np.random.seed(42)
-
-# Sample up to 30000 users for training efficiency
-user_groups = list(rated_by_user)
-if len(user_groups) > 30000:
-    sampled_indices = np.random.choice(len(user_groups), 30000, replace=False)
-    user_groups = [user_groups[i] for i in sampled_indices]
-    print(f"  Sampled 30,000 users from {len(rated_by_user):,}")
-else:
-    print(f"  Using all {len(user_groups):,} users")
-
-for uid, group in user_groups:
-    user_likes = set(group[group['rating'] >= 4]['movieId'])
-    user_dislikes = set(group[group['rating'] < 4]['movieId'])
-
-    if len(user_likes) < 2:
-        continue
-
-    likes_list = list(user_likes)
-
-    # Positive pairs: both liked (sample up to 5 pairs per user)
-    n_pos = min(5, len(likes_list) * (len(likes_list) - 1) // 2)
+for uid in selected_uids:
+    likes_list = grouped_likes[uid]
+    dislikes_list = grouped_dislikes.get(uid, [])
+    
+    n_pos = min(6, len(likes_list) * (len(likes_list) - 1) // 2)
     for _ in range(n_pos):
         i, j = np.random.choice(len(likes_list), 2, replace=False)
         a, b = likes_list[i], likes_list[j]
-        if a in movie_lookup.index and b in movie_lookup.index:
-            ma, mb = movie_lookup.loc[a], movie_lookup.loc[b]
-            features = compute_features(ma, mb, a, b)
-            all_pairs.append(features + [1])
+        if a in movie_meta and b in movie_meta:
+            ma, mb = movie_meta[a], movie_meta[b]
+            all_pairs.append(fast_compute_features(ma, mb, a, b) + [1])
             positive_count += 1
             pair_count += 1
 
-    # Negative pairs: liked A but not B (sample same number)
-    if user_dislikes:
-        dislikes_list = list(user_dislikes)
+    if dislikes_list:
         n_neg = min(n_pos, len(dislikes_list))
         for _ in range(n_neg):
             a = likes_list[np.random.randint(len(likes_list))]
             b = dislikes_list[np.random.randint(len(dislikes_list))]
-            if a in movie_lookup.index and b in movie_lookup.index:
-                ma, mb = movie_lookup.loc[a], movie_lookup.loc[b]
-                features = compute_features(ma, mb, a, b)
-                all_pairs.append(features + [0])
+            if a in movie_meta and b in movie_meta:
+                ma, mb = movie_meta[a], movie_meta[b]
+                all_pairs.append(fast_compute_features(ma, mb, a, b) + [0])
                 pair_count += 1
 
 print(f"  {pair_count:,} pairs ({positive_count:,} positive)")
@@ -252,19 +276,22 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 print(f"  Train: {len(X_train):,}, Locked test: {len(X_test):,}")
 
-# ── 9. Fit logistic regression ───────────────────────────────────────────
-model = LogisticRegression(max_iter=2000, random_state=42)
-model.fit(X_train, y_train)
+# ── 9. Fit logistic regression with StandardScaler and C=5.0 ──────────────
+pipeline = Pipeline([
+    ('scaler', StandardScaler()),
+    ('clf', LogisticRegression(C=5.0, max_iter=2000, random_state=42))
+])
+pipeline.fit(X_train, y_train)
 
 # Training metrics
-train_pred = model.predict(X_train)
-train_proba = model.predict_proba(X_train)[:, 1]
+train_pred = pipeline.predict(X_train)
+train_proba = pipeline.predict_proba(X_train)[:, 1]
 print(f"  Train accuracy: {accuracy_score(y_train, train_pred):.4f}")
 
 # ── 10. Open the locked test set (once!) ─────────────────────────────────
 print("\n=== Opening locked test set ===")
-test_pred = model.predict(X_test)
-test_proba = model.predict_proba(X_test)[:, 1]
+test_pred = pipeline.predict(X_test)
+test_proba = pipeline.predict_proba(X_test)[:, 1]
 test_acc = accuracy_score(y_test, test_pred)
 test_loss = log_loss(y_test, test_proba)
 print(f"  Test accuracy:  {test_acc:.4f}")
@@ -299,13 +326,28 @@ for i in range(n_bins):
 avg_gap = total_gap / total_count if total_count > 0 else 0
 print(f"\n  Average gap: {avg_gap:.4f}")
 
-# ── 12. Model weights ────────────────────────────────────────────────────
-weights = model.coef_[0].tolist()
-bias = model.intercept_[0]
-print(f"\nModel weights:")
+# ── 12. Equivalent raw model weights & bias for linear presentation ───────
+# Since pipeline computes: z = sum(w_std * (x - mean)/scale) + b_std
+# Equivalent unscaled weights: w_raw = w_std / scale
+# Equivalent unscaled bias: b_raw = b_std - sum(w_std * mean / scale)
+scaler = pipeline.named_steps['scaler']
+clf = pipeline.named_steps['clf']
+w_std = clf.coef_[0]
+b_std = clf.intercept_[0]
+w_raw = w_std / scaler.scale_
+b_raw = b_std - np.sum((w_std * scaler.mean_) / scaler.scale_)
+
+weights = w_raw.tolist()
+bias = float(b_raw)
+
+print(f"\nModel weights (unscaled equivalent for direct UI calculation):")
 for name, w in zip(feature_names, weights):
     print(f"  {name}: {w:.4f}")
 print(f"  bias: {bias:.4f}")
+
+print(f"\nModel weights (standardized feature importance):")
+for name, w in zip(feature_names, w_std.tolist()):
+    print(f"  {name}: {w:.4f}")
 
 # ── 13. Pre-compute recommendations for top 1000 movies ──────────────────
 print(f"\nPre-computing recommendations for {TOP_N_MOVIES} movies...")
@@ -326,7 +368,7 @@ for mid_a in top_ids:
         mb = top_lookup.loc[mid_b]
 
         features = np.array([compute_features(ma, mb, mid_a, mid_b)])
-        prob = model.predict_proba(features)[0][1]
+        prob = pipeline.predict_proba(features)[0][1]
         scores.append((mid_b, prob))
 
     scores.sort(key=lambda x: x[1], reverse=True)
