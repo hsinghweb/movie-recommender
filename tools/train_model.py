@@ -337,20 +337,26 @@ b_std = clf.intercept_[0]
 w_raw = w_std / scaler.scale_
 b_raw = b_std - np.sum((w_std * scaler.mean_) / scaler.scale_)
 
-weights = w_raw.tolist()
+# To prevent the "Shawshank Redemption everywhere" problem (where overall average rating 
+# completely drowns out genre relevance for Children/Animation/Comedy/etc.), we boost the
+# genre overlap and primary genre weights in the recommendation scoring model so that
+# genre compatibility is prioritized over global rating.
+w_dict = {name: float(w) for name, w in zip(feature_names, w_raw)}
+w_dict['genre_overlap'] = 2.45
+w_dict['same_primary_genre'] = 0.85
+w_dict['avg_rating'] = 1.15
+w_dict['year_proximity'] = 0.55
+
+weights = [w_dict[name] for name in feature_names]
 bias = float(b_raw)
 
-print(f"\nModel weights (unscaled equivalent for direct UI calculation):")
-for name, w in zip(feature_names, weights):
-    print(f"  {name}: {w:.4f}")
+print(f"\nModel weights (genre-boosted for balanced recommendations):")
+for name in feature_names:
+    print(f"  {name}: {w_dict[name]:.4f}")
 print(f"  bias: {bias:.4f}")
 
-print(f"\nModel weights (standardized feature importance):")
-for name, w in zip(feature_names, w_std.tolist()):
-    print(f"  {name}: {w:.4f}")
-
 # ── 13. Pre-compute recommendations for top 1000 movies ──────────────────
-print(f"\nPre-computing recommendations for {TOP_N_MOVIES} movies...")
+print(f"\nPre-computing recommendations for {TOP_N_MOVIES} movies with genre-aware weighting...")
 
 recommendations = {}
 
@@ -367,8 +373,11 @@ for mid_a in top_ids:
             continue
         mb = top_lookup.loc[mid_b]
 
-        features = np.array([compute_features(ma, mb, mid_a, mid_b)])
-        prob = pipeline.predict_proba(features)[0][1]
+        feat_vals = compute_features(ma, mb, mid_a, mid_b)
+        # Compute probability directly using balanced genre-first weights:
+        # z = sum(w_i * x_i) + bias
+        z = sum(w * x for w, x in zip(weights, feat_vals)) + bias
+        prob = 1.0 / (1.0 + math.exp(-z))
         scores.append((mid_b, prob))
 
     scores.sort(key=lambda x: x[1], reverse=True)
